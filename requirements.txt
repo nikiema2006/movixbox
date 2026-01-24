@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+gunicorn
+pydantic
+moviebox-api
+httpx
+pydantic-settings
+pydantic-extra-types
