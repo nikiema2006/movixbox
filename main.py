@@ -5,7 +5,10 @@ from pydantic import BaseModel
 from typing import Optional, List
 import os
 import logging
-from moviebox_api import MovieClient, SeriesClient
+
+# ✅ IMPORTS CORRECTS pour moviebox-api
+from moviebox_api.models import SearchResult
+from moviebox_api.core import Movie, Series
 
 # Configuration du logging
 logging.basicConfig(
@@ -54,7 +57,7 @@ class SeriesStreamRequest(BaseModel):
     quality: str = "best"
     subtitle_language: str = "English"
 
-# Cache simple en mémoire (optionnel)
+# Cache simple en mémoire
 search_cache = {}
 
 @app.get("/")
@@ -77,7 +80,7 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check pour Render"""
-    return {"status": "healthy"}
+    return {"status": "healthy", "service": "moviebox-api"}
 
 @app.get("/api/v1/search/movies")
 async def search_movies(
@@ -97,14 +100,15 @@ async def search_movies(
     try:
         logger.info(f"Recherche films: '{query}' (année: {year})")
         
-        # Vérifier le cache (optionnel)
+        # Vérifier le cache
         cache_key = f"movie_{query}_{year}"
         if cache_key in search_cache:
             logger.info("Résultat depuis le cache")
             return search_cache[cache_key]
         
-        client = MovieClient()
-        results = await client.search(query)
+        # ✅ Utiliser la classe Movie correctement
+        movie_client = Movie()
+        results = await movie_client.search(query)
         
         if not results:
             return {
@@ -130,17 +134,15 @@ async def search_movies(
                     "title": r.title,
                     "year": r.release_year,
                     "thumbnail": r.thumbnail,
-                } for r in results[:30]  # Limiter les résultats
+                } for r in results[:30]
             ]
         }
         
-        # Mettre en cache (expire pas car c'est juste la recherche)
         search_cache[cache_key] = response_data
-        
         return response_data
         
     except Exception as e:
-        logger.error(f"Erreur recherche films: {str(e)}")
+        logger.error(f"Erreur recherche films: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"Erreur lors de la recherche: {str(e)}"
@@ -159,8 +161,9 @@ async def search_series(
         if cache_key in search_cache:
             return search_cache[cache_key]
         
-        client = SeriesClient()
-        results = await client.search(query)
+        # ✅ Utiliser la classe Series correctement
+        series_client = Series()
+        results = await series_client.search(query)
         
         if not results:
             return {
@@ -193,7 +196,7 @@ async def search_series(
         return response_data
         
     except Exception as e:
-        logger.error(f"Erreur recherche séries: {str(e)}")
+        logger.error(f"Erreur recherche séries: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
 
 @app.post("/api/v1/movies/stream")
@@ -203,18 +206,12 @@ async def get_movie_stream_url(request: MovieStreamRequest):
     
     ⚠️ IMPORTANT: Cette URL expire après 2-6 heures
     Il faut régénérer l'URL si elle ne fonctionne plus
-    
-    Body:
-        - title: Titre du film
-        - quality: best, 1080p, 720p, 480p, 360p, worst (default: best)
-        - subtitle_language: Langue des sous-titres (default: English)
-        - year: Année pour filtrer (optionnel)
     """
     try:
         logger.info(f"Génération URL streaming: '{request.title}' ({request.quality})")
         
-        client = MovieClient()
-        results = await client.search(request.title)
+        movie_client = Movie()
+        results = await movie_client.search(request.title)
         
         if not results:
             raise HTTPException(
@@ -235,19 +232,18 @@ async def get_movie_stream_url(request: MovieStreamRequest):
         logger.info(f"Film trouvé: {movie.title} ({movie.release_year})")
         
         # Obtenir les détails complets
-        details = await client.get_movie_details(movie)
+        details = await movie_client.get_details(movie)
         
         # Sélectionner la qualité
         available_qualities = details.qualities
         
-        # Logique de sélection de qualité
         stream_url = None
         selected_quality = request.quality
         
         if request.quality in available_qualities:
             stream_url = available_qualities[request.quality]
         else:
-            # Fallback vers la meilleure qualité
+            # Fallback
             priority = ["best", "1080p", "720p", "480p", "360p", "worst"]
             for q in priority:
                 if q in available_qualities:
@@ -256,7 +252,6 @@ async def get_movie_stream_url(request: MovieStreamRequest):
                     break
         
         if not stream_url and available_qualities:
-            # Prendre la première disponible
             selected_quality = list(available_qualities.keys())[0]
             stream_url = available_qualities[selected_quality]
         
@@ -320,8 +315,8 @@ async def get_series_stream_url(request: SeriesStreamRequest):
             f"S{request.season}E{request.episode}"
         )
         
-        client = SeriesClient()
-        results = await client.search(request.title)
+        series_client = Series()
+        results = await series_client.search(request.title)
         
         if not results:
             raise HTTPException(
@@ -336,7 +331,7 @@ async def get_series_stream_url(request: SeriesStreamRequest):
         logger.info(f"Série trouvée: {series.title} ({series.release_year})")
         
         # Obtenir les détails de la série
-        details = await client.get_series_details(series)
+        details = await series_client.get_details(series)
         
         # Trouver la saison
         season = next(
@@ -346,7 +341,7 @@ async def get_series_stream_url(request: SeriesStreamRequest):
         if not season:
             raise HTTPException(
                 status_code=404,
-                detail=f"Saison {request.season} non trouvée pour '{series.title}'"
+                detail=f"Saison {request.season} non trouvée"
             )
         
         # Trouver l'épisode
@@ -357,11 +352,11 @@ async def get_series_stream_url(request: SeriesStreamRequest):
         if not episode:
             raise HTTPException(
                 status_code=404,
-                detail=f"Épisode {request.episode} non trouvé dans S{request.season}"
+                detail=f"Épisode {request.episode} non trouvé"
             )
         
         # Obtenir les détails de l'épisode
-        episode_details = await client.get_episode_details(episode)
+        episode_details = await series_client.get_episode_details(episode)
         
         # Sélectionner la qualité
         available_qualities = episode_details.qualities
@@ -385,7 +380,7 @@ async def get_series_stream_url(request: SeriesStreamRequest):
         if not stream_url:
             raise HTTPException(
                 status_code=404,
-                detail="Aucune URL de streaming disponible pour cet épisode"
+                detail="Aucune URL de streaming disponible"
             )
         
         # Sous-titres
@@ -424,21 +419,21 @@ async def get_series_stream_url(request: SeriesStreamRequest):
         logger.error(f"Erreur série stream: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
 
-@app.get("/api/v1/series/{series_id}/seasons")
+@app.get("/api/v1/series/{series_id}/info")
 async def get_series_info(
     series_id: str,
     title: str = Query(..., description="Titre de la série")
 ):
     """Obtenir les informations sur les saisons disponibles"""
     try:
-        client = SeriesClient()
-        results = await client.search(title)
+        series_client = Series()
+        results = await series_client.search(title)
         
         if not results:
             raise HTTPException(status_code=404, detail="Série non trouvée")
         
         series = results[0]
-        details = await client.get_series_details(series)
+        details = await series_client.get_details(series)
         
         seasons_info = []
         for season in details.seasons:
@@ -463,7 +458,7 @@ async def get_series_info(
         }
         
     except Exception as e:
-        logger.error(f"Erreur info série: {str(e)}")
+        logger.error(f"Erreur info série: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.exception_handler(Exception)
