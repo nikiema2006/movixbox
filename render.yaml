@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: moviebox-api-backend
+    runtime: python
+    region: singapore  # Plus proche pour l'Afrique
+    plan: free  # Ou starter pour production
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: MOVIEBOX_API_HOST
+        value: h5.aoneroom.com  # Mirror host par défaut
+    healthCheckPath: /health
