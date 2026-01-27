@@ -4,8 +4,10 @@ from fastapi import FastAPI, HTTPException, Query
 from moviebox_api.requests import Session
 from moviebox_api.core import Homepage, Search, Trending, MovieDetails, TVSeriesDetails, PopularSearch
 from moviebox_api.stream import StreamFilesDetail
-from moviebox_api.constants import SubjectType
-from moviebox_api.models import SearchResultsItem
+from moviebox_api.constants import SubjectType, ITEM_DETAILS_PATH
+from moviebox_api.models import SearchResultsItem, OPS
+import uuid
+from datetime import date
 
 app = FastAPI(title="Moviebox Streaming API", description="Backend pour application de streaming utilisant moviebox-api")
 
@@ -65,15 +67,16 @@ async def search(
 @app.get("/details/{subject_id}")
 async def get_details(subject_id: str, type: int = 1):
     try:
-        # On crée un objet SearchResultsItem minimal pour MovieDetails/TVSeriesDetails
-        # car ils attendent soit une URL soit un SearchResultsItem
-        # L'URL de détail est généralement /detail/{subject_id}
-        detail_path = f"detail/{subject_id}"
+        # Correction de l'URL pour passer la validation de moviebox-api
+        # L'URL doit correspondre au pattern: ^.*/detail/[\w-]+(?:\?id\=\d{17,}.*)?$
+        # Note: Le subject_id doit être long (17+ chiffres) pour passer le pattern strict par défaut.
+        # Si votre subject_id est plus court, moviebox-api risque de le rejeter.
+        detail_url = f"{ITEM_DETAILS_PATH}/item?id={subject_id}"
         
         if type == 1: # Movie
-            details_provider = MovieDetails(detail_path, session)
+            details_provider = MovieDetails(detail_url, session)
         else: # TV Series
-            details_provider = TVSeriesDetails(detail_path, session)
+            details_provider = TVSeriesDetails(detail_url, session)
             
         content = await details_provider.get_content_model()
         return content
@@ -88,20 +91,9 @@ async def get_stream(
     episode: int = 1
 ):
     try:
-        # Création d'un item fictif pour StreamFilesDetail
-        # subjectType est requis pour StreamFilesDetail
-        from pydantic import HttpUrl
-        from datetime import date
-        from moviebox_api.models import ContentImageModel, OPS
-        import uuid
-
-        # Mock image
-        mock_image = ContentImageModel(
-            url="https://example.com/image.jpg",
-            width=100, height=100, size=100, format="jpg",
-            thumbnail="https://example.com/thumb.jpg",
-            blurHash="", avgHueLight="", avgHueDark="", id="1"
-        )
+        # Correction de la création de SearchResultsItem
+        # Les champs 'genre' et 'subtitles' doivent être des chaînes de caractères séparées par des virgules
+        # car les validateurs Pydantic de moviebox-api appellent .split(",") dessus.
         
         mock_item = SearchResultsItem(
             subjectId=subject_id,
@@ -110,15 +102,20 @@ async def get_stream(
             description="",
             releaseDate=date(2000, 1, 1),
             duration=0,
-            genre=["Action"],
-            cover=mock_image,
+            genre="Action", # Chaîne, pas liste
+            cover={
+                "url": "https://example.com/image.jpg",
+                "width": 100, "height": 100, "size": 100, "format": "jpg",
+                "thumbnail": "https://example.com/thumb.jpg",
+                "blurHash": "", "avgHueLight": "", "avgHueDark": "", "id": "1"
+            },
             countryName="",
             imdbRatingValue=0.0,
-            detailPath=f"detail/{subject_id}",
+            detailPath=f"item", # Utilisé pour construire le Referer
             appointmentCnt=0,
             appointmentDate="",
             corner="",
-            subtitles=[],
+            subtitles="", # Chaîne, pas liste
             ops=OPS(rid=uuid.uuid4(), trace_id=""),
             hasResource=True
         )
@@ -136,4 +133,3 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-    
