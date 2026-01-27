@@ -68,12 +68,14 @@ async def search(
 @app.get("/details/{subject_id}")
 async def get_details(subject_id: str, type: int = Query(..., description="1 pour film, 2 pour série")):
     try:
-        # CORRECTION 1: Utiliser directement subject_id sans construire une URL
-        # MovieDetails et TVSeriesDetails attendent le subject_id directement
+        # CORRECTION: MovieDetails et TVSeriesDetails attendent une URL complète
+        # Format attendu: "detail/item?id={subject_id}" ou juste "item?id={subject_id}"
+        detail_path = f"item?id={subject_id}"
+        
         if type == 1:  # Movie
-            details_provider = MovieDetails(subject_id, session)
+            details_provider = MovieDetails(detail_path, session)
         elif type == 2:  # TV Series
-            details_provider = TVSeriesDetails(subject_id, session)
+            details_provider = TVSeriesDetails(detail_path, session)
         else:
             raise HTTPException(status_code=400, detail="Type doit être 1 (film) ou 2 (série)")
             
@@ -93,12 +95,12 @@ async def get_stream(
     episode: int = Query(1, description="Numéro d'épisode (pour séries)")
 ):
     try:
-        # CORRECTION 2: Validation du type
+        # Validation du type
         if type not in [1, 2]:
             raise HTTPException(status_code=400, detail="Type doit être 1 (film) ou 2 (série)")
         
-        # CORRECTION 3: Créer un SearchResultsItem plus propre
-        # On utilise le constructeur avec les champs requis uniquement
+        # CORRECTION: Pydantic exige une URL valide pour cover.url
+        # On utilise une URL placeholder valide
         mock_item = SearchResultsItem(
             subjectId=subject_id,
             subjectType=SubjectType(type),
@@ -106,22 +108,22 @@ async def get_stream(
             description="",
             releaseDate=date.today(),
             duration=0,
-            genre="",  # Chaîne vide valide
+            genre="",
             cover={
-                "url": "",
-                "width": 0, 
-                "height": 0, 
-                "size": 0, 
+                "url": "https://via.placeholder.com/300x450",  # URL valide requise
+                "width": 300, 
+                "height": 450, 
+                "size": 1000, 
                 "format": "jpg",
-                "thumbnail": "",
+                "thumbnail": "https://via.placeholder.com/150x225",  # URL valide requise
                 "blurHash": "", 
                 "avgHueLight": "", 
                 "avgHueDark": "", 
-                "id": ""
+                "id": "placeholder"
             },
             countryName="",
             imdbRatingValue=0.0,
-            detailPath="",  # Pas besoin de referer spécifique
+            detailPath=f"item?id={subject_id}",
             appointmentCnt=0,
             appointmentDate="",
             corner="",
@@ -130,14 +132,9 @@ async def get_stream(
             hasResource=True
         )
         
-        # CORRECTION 4: Instanciation correcte de StreamFilesDetail
-        # La classe abstraite nécessite une implémentation concrète
-        # Selon moviebox-api, on peut passer directement le SearchResultsItem
         stream_provider = StreamFilesDetail(session, mock_item)
         
-        # CORRECTION 5: Appel de la méthode correcte
-        # Pour les films, season et episode sont ignorés
-        # Pour les séries, ils sont utilisés
+        # Différencier films et séries
         if type == 1:  # Film
             content = await stream_provider.get_content_model()
         else:  # Série
