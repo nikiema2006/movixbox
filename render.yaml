@@ -1,17 +1,12 @@
 services:
   - type: web
-    name: moviebox-streaming-api
-    runtime: python
-    region: singapore
-    plan: free
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+    name: moviebox-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.0
       - key: MOVIEBOX_API_HOST
         value: h5.aoneroom.com
-      - key: CORS_ORIGINS
-        value: "*"
-    healthCheckPath: /health
+      - key: PYTHON_VERSION
+        value: 3.11.0
     autoDeploy: true
