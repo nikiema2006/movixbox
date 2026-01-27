@@ -69,10 +69,9 @@ async def search(
 async def get_details(subject_id: str, type: int = 1):
     try:
         # Correction de l'URL pour les détails
-        # L'API moviebox-api utilise ITEM_DETAILS_PATH (/detail)
-        # Le format attendu par le serveur est souvent /movies/{slug}-id
-        # Mais pour passer la validation locale de moviebox-api, on utilise :
-        detail_url = f"{ITEM_DETAILS_PATH}/movie-{subject_id}?id={subject_id}"
+        # Le pattern attendu par moviebox-api est strict.
+        # On utilise un slug générique 'item' pour éviter les 404 sur des slugs spécifiques.
+        detail_url = f"{ITEM_DETAILS_PATH}/item?id={subject_id}"
         
         if type == 1: # Movie
             details_provider = MovieDetails(detail_url, session)
@@ -82,7 +81,6 @@ async def get_details(subject_id: str, type: int = 1):
         content = await details_provider.get_content_model()
         return content
     except Exception as e:
-        # Log de l'erreur pour le débogage
         print(f"Error in get_details: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -95,9 +93,6 @@ async def get_stream(
 ):
     try:
         # Correction de la création de SearchResultsItem
-        # 1. genre et subtitles doivent être des chaînes (ex: "Action,Drama")
-        # 2. ops doit être une chaîne JSON (ex: '{"rid": "...", "trace_id": ""}')
-        
         ops_data = {
             "rid": str(uuid.uuid4()),
             "trace_id": ""
@@ -111,7 +106,7 @@ async def get_stream(
             description="",
             releaseDate=date(2000, 1, 1),
             duration=0,
-            genre="Action", # Chaîne pour le validateur .split(",")
+            genre="Action", # String pour le validateur .split(",")
             cover={
                 "url": "https://example.com/image.jpg",
                 "width": 100, "height": 100, "size": 100, "format": "jpg",
@@ -120,23 +115,24 @@ async def get_stream(
             },
             countryName="",
             imdbRatingValue=0.0,
-            detailPath=f"movie-{subject_id}", # Utilisé pour le Referer
+            detailPath=f"item?id={subject_id}", # Referer
             appointmentCnt=0,
             appointmentDate="",
             corner="",
-            subtitles="", # Chaîne pour le validateur .split(",")
-            ops=ops_json, # Chaîne JSON pour le validateur loads()
+            subtitles="", # String pour le validateur .split(",")
+            ops=ops_json, # String JSON pour le validateur loads()
             hasResource=True
         )
         
+        # Note: J'ai corrigé le bug dans moviebox-api/src/moviebox_api/stream.py 
+        # pour permettre l'instanciation de StreamFilesDetail.
         stream_provider = StreamFilesDetail(session, mock_item)
         content = await stream_provider.get_content_model(season, episode)
         return content
     except Exception as e:
         print(f"Error in get_stream: {str(e)}")
-        # Si 403, on renvoie une erreur explicite
         if "403" in str(e):
-            raise HTTPException(status_code=403, detail="Accès interdit par le serveur Moviebox. Un changement d'hôte ou de cookies peut être nécessaire.")
+            raise HTTPException(status_code=403, detail="Accès interdit par le serveur Moviebox.")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
