@@ -1,13 +1,14 @@
 import os
+import json
+import uuid
 from typing import Optional
+from datetime import date
 from fastapi import FastAPI, HTTPException, Query
 from moviebox_api.requests import Session
 from moviebox_api.core import Homepage, Search, Trending, MovieDetails, TVSeriesDetails, PopularSearch
 from moviebox_api.stream import StreamFilesDetail
 from moviebox_api.constants import SubjectType, ITEM_DETAILS_PATH
 from moviebox_api.models import SearchResultsItem, OPS
-import uuid
-from datetime import date
 
 app = FastAPI(title="Moviebox Streaming API", description="Backend pour application de streaming utilisant moviebox-api")
 
@@ -67,11 +68,11 @@ async def search(
 @app.get("/details/{subject_id}")
 async def get_details(subject_id: str, type: int = 1):
     try:
-        # Correction de l'URL pour passer la validation de moviebox-api
-        # L'URL doit correspondre au pattern: ^.*/detail/[\w-]+(?:\?id\=\d{17,}.*)?$
-        # Note: Le subject_id doit être long (17+ chiffres) pour passer le pattern strict par défaut.
-        # Si votre subject_id est plus court, moviebox-api risque de le rejeter.
-        detail_url = f"{ITEM_DETAILS_PATH}/item?id={subject_id}"
+        # Correction de l'URL pour les détails
+        # L'API moviebox-api utilise ITEM_DETAILS_PATH (/detail)
+        # Le format attendu par le serveur est souvent /movies/{slug}-id
+        # Mais pour passer la validation locale de moviebox-api, on utilise :
+        detail_url = f"{ITEM_DETAILS_PATH}/movie-{subject_id}?id={subject_id}"
         
         if type == 1: # Movie
             details_provider = MovieDetails(detail_url, session)
@@ -81,6 +82,8 @@ async def get_details(subject_id: str, type: int = 1):
         content = await details_provider.get_content_model()
         return content
     except Exception as e:
+        # Log de l'erreur pour le débogage
+        print(f"Error in get_details: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stream/{subject_id}")
@@ -92,8 +95,14 @@ async def get_stream(
 ):
     try:
         # Correction de la création de SearchResultsItem
-        # Les champs 'genre' et 'subtitles' doivent être des chaînes de caractères séparées par des virgules
-        # car les validateurs Pydantic de moviebox-api appellent .split(",") dessus.
+        # 1. genre et subtitles doivent être des chaînes (ex: "Action,Drama")
+        # 2. ops doit être une chaîne JSON (ex: '{"rid": "...", "trace_id": ""}')
+        
+        ops_data = {
+            "rid": str(uuid.uuid4()),
+            "trace_id": ""
+        }
+        ops_json = json.dumps(ops_data)
         
         mock_item = SearchResultsItem(
             subjectId=subject_id,
@@ -102,7 +111,7 @@ async def get_stream(
             description="",
             releaseDate=date(2000, 1, 1),
             duration=0,
-            genre="Action", # Chaîne, pas liste
+            genre="Action", # Chaîne pour le validateur .split(",")
             cover={
                 "url": "https://example.com/image.jpg",
                 "width": 100, "height": 100, "size": 100, "format": "jpg",
@@ -111,12 +120,12 @@ async def get_stream(
             },
             countryName="",
             imdbRatingValue=0.0,
-            detailPath=f"item", # Utilisé pour construire le Referer
+            detailPath=f"movie-{subject_id}", # Utilisé pour le Referer
             appointmentCnt=0,
             appointmentDate="",
             corner="",
-            subtitles="", # Chaîne, pas liste
-            ops=OPS(rid=uuid.uuid4(), trace_id=""),
+            subtitles="", # Chaîne pour le validateur .split(",")
+            ops=ops_json, # Chaîne JSON pour le validateur loads()
             hasResource=True
         )
         
@@ -124,6 +133,7 @@ async def get_stream(
         content = await stream_provider.get_content_model(season, episode)
         return content
     except Exception as e:
+        print(f"Error in get_stream: {str(e)}")
         # Si 403, on renvoie une erreur explicite
         if "403" in str(e):
             raise HTTPException(status_code=403, detail="Accès interdit par le serveur Moviebox. Un changement d'hôte ou de cookies peut être nécessaire.")
