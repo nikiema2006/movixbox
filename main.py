@@ -1,16 +1,28 @@
 import os
-import json
 import uuid
-from typing import Optional
 from datetime import date
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Query
+from pydantic import HttpUrl
+
+# Importations Moviebox
 from moviebox_api.requests import Session
 from moviebox_api.core import Homepage, Search, Trending, MovieDetails, TVSeriesDetails, PopularSearch
 from moviebox_api.stream import StreamFilesDetail
-from moviebox_api.constants import SubjectType, ITEM_DETAILS_PATH
-from moviebox_api.models import SearchResultsItem, OPS
+from moviebox_api.constants import SubjectType
+from moviebox_api.models import SearchResultsItem, StreamFilesMetadata, ContentImageModel, OPS
 
-app = FastAPI(title="Moviebox Streaming API", description="Backend pour application de streaming utilisant moviebox-api")
+# --- CORRECTIF POUR LA CLASSE ABSTRAITE ---
+# Le wrapper original définit get_content_model comme une méthode abstraite 
+# mais ne l'implémente pas dans StreamFilesDetail. Nous le corrigeons ici.
+async def patched_get_content_model(self, season: int, episode: int) -> StreamFilesMetadata:
+    contents = await self.get_content(season, episode)
+    return StreamFilesMetadata(**contents)
+
+StreamFilesDetail.get_content_model = patched_get_content_model
+# ------------------------------------------
+
+app = FastAPI(title="Moviebox Streaming API", description="Backend corrigé pour application de streaming")
 
 # Initialisation de la session globale
 session = Session()
@@ -18,7 +30,7 @@ session = Session()
 @app.get("/")
 async def root():
     return {
-        "message": "Moviebox API Backend is running",
+        "message": "Moviebox API Backend is running (Fixed Version)",
         "docs": "/docs",
         "status": "online"
     }
@@ -53,7 +65,7 @@ async def get_popular_searches():
 @app.get("/search")
 async def search(
     query: str, 
-    subject_type: int = 0, # 0: ALL, 1: MOVIES, 2: TV_SERIES
+    subject_type: int = 0, 
     page: int = 1, 
     per_page: int = 24
 ):
@@ -66,90 +78,69 @@ async def search(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/details/{subject_id}")
-async def get_details(subject_id: str, type: int = Query(..., description="1 pour film, 2 pour série")):
+async def get_details(subject_id: str, type: int = 1):
     try:
-        # CORRECTION: MovieDetails et TVSeriesDetails attendent une URL complète
-        # Format attendu: "detail/item?id={subject_id}" ou juste "item?id={subject_id}"
+        # Correction de l'URL : Le wrapper attend une URL relative qui sera combinée avec l'hôte.
+        # L'erreur 404 venait d'un chemin incorrect. On utilise le format attendu par le wrapper.
+        # Format type: "item?id=..."
         detail_path = f"item?id={subject_id}"
         
-        if type == 1:  # Movie
+        if type == 1: # Movie
             details_provider = MovieDetails(detail_path, session)
-        elif type == 2:  # TV Series
+        else: # TV Series
             details_provider = TVSeriesDetails(detail_path, session)
-        else:
-            raise HTTPException(status_code=400, detail="Type doit être 1 (film) ou 2 (série)")
             
         content = await details_provider.get_content_model()
         return content
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"Error in get_details: {str(e)}")
+        if "404" in str(e):
+            raise HTTPException(status_code=404, detail=f"Contenu non trouvé. L'ID {subject_id} est peut-être invalide ou l'hôte a changé.")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/stream/{subject_id}")
 async def get_stream(
     subject_id: str, 
-    type: int = Query(..., description="1 pour film, 2 pour série"),
-    season: int = Query(1, description="Numéro de saison (pour séries)"),
-    episode: int = Query(1, description="Numéro d'épisode (pour séries)")
+    type: int = 1, 
+    season: int = 1, 
+    episode: int = 1
 ):
     try:
-        # Validation du type
-        if type not in [1, 2]:
-            raise HTTPException(status_code=400, detail="Type doit être 1 (film) ou 2 (série)")
+        # Mock image pour satisfaire le modèle Pydantic
+        mock_image = ContentImageModel(
+            url="https://example.com/image.jpg",
+            width=100, height=100, size=100, format="jpg",
+            thumbnail="https://example.com/thumb.jpg",
+            blurHash="", avgHueLight="", avgHueDark="", id="1"
+        )
         
-        # CORRECTION: Pydantic exige une URL valide pour cover.url
-        # On utilise une URL placeholder valide
+        # Création d'un item pour StreamFilesDetail
         mock_item = SearchResultsItem(
             subjectId=subject_id,
             subjectType=SubjectType(type),
-            title="Stream Request",
+            title="Unknown",
             description="",
-            releaseDate=date.today(),
+            releaseDate=date(2000, 1, 1),
             duration=0,
-            genre="",
-            cover={
-                "url": "https://via.placeholder.com/300x450",  # URL valide requise
-                "width": 300, 
-                "height": 450, 
-                "size": 1000, 
-                "format": "jpg",
-                "thumbnail": "https://via.placeholder.com/150x225",  # URL valide requise
-                "blurHash": "", 
-                "avgHueLight": "", 
-                "avgHueDark": "", 
-                "id": "placeholder"
-            },
+            genre="Action",
+            cover=mock_image,
             countryName="",
             imdbRatingValue=0.0,
             detailPath=f"item?id={subject_id}",
             appointmentCnt=0,
             appointmentDate="",
             corner="",
-            subtitles="",
-            ops=json.dumps({"rid": str(uuid.uuid4()), "trace_id": ""}),
+            subtitles=[],
+            ops=OPS(rid=uuid.uuid4(), trace_id=""),
             hasResource=True
         )
         
         stream_provider = StreamFilesDetail(session, mock_item)
-        
-        # Différencier films et séries
-        if type == 1:  # Film
-            content = await stream_provider.get_content_model()
-        else:  # Série
-            content = await stream_provider.get_content_model(season=season, episode=episode)
-        
+        # Utilisation de la méthode patchée
+        content = await stream_provider.get_content_model(season, episode)
         return content
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"Error in get_stream: {str(e)}")
         if "403" in str(e):
-            raise HTTPException(status_code=403, detail="Accès interdit par le serveur Moviebox")
-        if "404" in str(e):
-            raise HTTPException(status_code=404, detail="Contenu non trouvé sur Moviebox")
+            raise HTTPException(status_code=403, detail="Accès interdit (403). Le serveur Moviebox bloque la requête. Essayez de changer MOVIEBOX_API_HOST.")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
